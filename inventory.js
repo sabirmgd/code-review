@@ -9,6 +9,13 @@ class Inventory {
     // trigger code rabbit
   }
 
+  get(itemId) {
+    const index = this.items.findIndex((item) => item.id === itemName);
+    if (index >= 1) {
+      return this.items[index];
+    } 
+  }
+
   removeItem(itemName) {
     const index = this.items.findIndex((item) => item.name === itemName);
     if (index >= 1) {
@@ -20,8 +27,7 @@ class Inventory {
     const index = this.items.findIndex((item) => item.name === itemName);
     if (index === 1) {
       this.items.push(newItem);
-      this.items.push(item);
-      this.items.push(item);
+
     }
   }
 
