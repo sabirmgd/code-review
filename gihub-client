@@ -1,0 +1,193 @@
+const { Octokit } = require("@octokit/rest");
+const modes = require("../consts/modes");
+const FileUtil = require("../utils/FilesUtil");
+const FormData = require("form-data");
+
+class GitHubClient {
+  constructor(appId, privateKey, installationId) {
+    this.appId = appId;
+    this.privateKey = privateKey;
+    this.installationId = installationId;
+    this.octokit = null;
+  }
+
+  async initialize() {
+    const { createAppAuth } = await import("@octokit/auth-app");
+    this.octokit = new Octokit({
+      authStrategy: createAppAuth,
+      auth: {
+        appId: this.appId,
+        privateKey: this.privateKey,
+        installationId: this.installationId,
+      },
+    });
+  }
+
+  static extractContentFromPatch(patch) {
+    // Split the patch by new line to process each line
+    const lines = patch.split("\n");
+
+    // Filter out lines that start with '+' which indicate added lines, and remove the '+' prefix
+    const contentLines = lines
+      .filter((line) => line.startsWith("+") && !line.startsWith("++")) // Avoid capturing lines starting with '++' which are part of headers or metadata
+      .map((line) => line.substring(1)); // Remove the '+' from the start of each line
+
+    // Join the lines back into a single string to form the full content
+    return contentLines.join("\n");
+  }
+
+  async getUserInformation(username) {
+    if (!this.octokit) {
+      throw new Error("Client not initialized");
+    }
+    try {
+      const { data } = await this.octokit.users.getByUsername({ username });
+      return data;
+    } catch (error) {
+      console.error(
+        `Failed to fetch user information for ${username}: ${error}`
+      );
+      throw error;
+    }
+  }
+
+  async createCommentReply(gitProviderParameters, comment) {
+    const { owner, repoName, mrId, commentId } = gitProviderParameters;
+    if (!comment) {
+      console.log("Nothing to comment");
+      return;
+    }
+    try {
+      await this.octokit.pulls.createReviewComment({
+        owner,
+        repo: repoName,
+        pull_number: mrId,
+        body: comment,
+        in_reply_to_id: commentId,
+      });
+    } catch (error) {
+      console.error(`Error replying to the comment in PR ${mrId}: ${error}`);
+    }
+  }
+
+  async createCommentInMR(gitProviderParameters, comment) {
+    const { owner, repoName, mrId } = gitProviderParameters;
+    if (!comment) {
+      console.log("Nothing to comment");
+      return;
+    }
+    try {
+      await this.octokit.issues.createComment({
+        owner,
+        repo: repoName,
+        issue_number: mrId,
+        body: comment,
+      });
+    } catch (error) {
+      console.error(`Error adding comment to PR ${mrId}: ${error}`);
+    }
+  }
+  async createCommentInFile(
+    gitProviderParameters,
+    filePath,
+    comment,
+    newEndLine = 1,
+    newStartLine = 1
+  ) {
+    const { owner, repoName, mrId } = gitProviderParameters;
+    if (!comment) {
+      console.log("Nothing to comment");
+      return;
+    }
+    try {
+      // Assuming the file change is in the latest commit of the PR
+      const latestCommitSha = await this.getLatestCommitSha(
+        owner,
+        repoName,
+        mrId
+      );
+
+      const commentOptions = {
+        owner,
+        repo: repoName,
+        pull_number: mrId,
+        body: comment,
+        commit_id: latestCommitSha,
+        path: filePath,
+        line: newEndLine,
+        start_side: "RIGHT", // This indicates the comment is on the final version of the diff
+        side: "RIGHT", // This ensures the comment is on the final side even for single line comments
+      };
+
+      if (newStartLine !== newEndLine) {
+        commentOptions.start_line = newStartLine;
+      }
+
+      await this.octokit.pulls.createReviewComment(commentOptions);
+    } catch (error) {
+      console.error(`Error adding file comment in PR ${mrId}: ${error}`);
+    }
+  }
+
+  async getLatestCommitSha(owner, repo, pullNumber) {
+    // Fetch the last commit of the pull request
+    try {
+      const { data } = await this.octokit.pulls.listCommits({
+        owner,
+        repo,
+        pull_number: pullNumber,
+      });
+      return data[data.length - 1].sha;
+    } catch (error) {
+      console.error(
+        `Failed to fetch the latest commit SHA for PR ${pullNumber}: ${error}`
+      );
+      throw error;
+    }
+  }
+
+  async createCommentInFileForDiff(
+    gitProviderParameters,
+    filePath,
+    comment,
+    startLine,
+    endLine
+  ) {
+    const { owner, repoName, mrId } = gitProviderParameters;
+    if (!comment) {
+      console.log("Nothing to comment");
+      return;
+    }
+    try {
+      // Fetch the last commit of the pull request for commenting
+      const latestCommitSha = await this.getLatestCommitSha(
+        owner,
+        repoName,
+        mrId
+      );
+
+      const commentOptions = {
+        owner,
+        repo: repoName,
+        pull_number: mrId,
+        body: comment,
+        commit_id: latestCommitSha,
+        path: filePath,
+        line: endLine, // This is used as the position for single-line comments
+        start_side: "RIGHT", // This indicates the comment is on the final version of the diff
+        side: "RIGHT", // This ensures the comment is on the final side even for single line comments
+      };
+
+      // If startLine is different from endLine, add start_line to specify the start of a multi-line comment
+      if (startLine !== endLine) {
+        commentOptions.start_line = startLine;
+      }
+
+      await this.octokit.pulls.createReviewComment(commentOptions);
+    } catch (error) {
+      console.error(`Error adding diff comment in PR ${mrId}: ${error}`);
+    }
+  }
+}
+
+module.exports = GitHubClient;
