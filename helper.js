@@ -9,6 +9,7 @@ function extractStartingLineNumbers(diff) {
     return {
       x,
       y,
+      z,
       newFileStartLine,
     
     };
